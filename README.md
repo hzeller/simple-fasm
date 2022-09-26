@@ -2,7 +2,7 @@ Simple FPGA assembler file format parser
 ----------------------------------------
 
 Very simple [single-header](./fasm-parse.h) implementation of a parser for the
-[fasm] FPGA assembler format.
+[fasm] FPGA assembly format.
 
 Attributes are not supported yet and skipped gracefully. Also, bit range
 span in a feature assignment is limited to 64 bits currently
@@ -45,8 +45,33 @@ ParseResult parse(std::string_view content, FILE *errstream,
 
 ## Build and Test
 
+The build builds the test, a testfile generator and a `fasm-validation-parse`
+utility using the parser.
+
 ```
+make
 make test
+```
+
+## Benchmark parsing a larger file
+
+There is a little `fasm-generate-testfile` utility that creates a dummy
+fasm file. By default it creates 100M lines, about 3.6GiB of data:
+
+```
+./fasm-generate-testfile > /tmp/dummy.fasm
+```
+
+The implementation is not optimized yet, but the parse speed looks
+promising:
+
+On an old i7-7500U laptop this parses at about 400MiB/s on a single core:
+
+```
+$ ./fasm-validation-parse /tmp/dummy.fasm
+Parsing /tmp/dummy.fasm with 3784055505 Bytes.
+100000000 lines. XOR of all values: 230C2BE345D5860A
+8.781 seconds wall time. 411.0 MiB/s
 ```
 
 [fasm]: https://fasm.readthedocs.io/
