@@ -9,20 +9,39 @@
 #include <functional>
 #include <string_view>
 
+namespace fasm {
 // Parse callback for FASM lines. The "feature" found in line number "line"
 // is set the values given in "bits", starting from lowest "start_bit" (lsb)
 // with given "width"
-using FasmParseCallback =
+using ParseCallback =
     std::function<void(uint32_t line, std::string_view feature, int start_bit,
                        int width, uint64_t bits)>;
 
 enum class ParseResult {
-  kSuccess,
-  kInfo,
-  kNonCritical,
-  kSkipped,
-  kError
+  kSuccess,     // Successful parse
+  kInfo,        // Got info messages, mostly FYI
+  kNonCritical, // Found strange values, but mostly non-critical FYI
+  kSkipped,     // There were lines that had to be skipped.
+  kError        // Errornous input
 };
+
+// Parse FPGA assembly file, send parsed values to "parse_callback".
+// The "content" is the buffer to parse; last line needs to end with a newline.
+// Errors/Warnings are reported to "errstream".
+// Attributes are not handled and skipped gracefully.
+//
+// The "feature" string_view passed into the callback function is not ephemeral
+// but backed by the original content, so it is valid for the lifetime of
+// "content".
+//
+// If there are warnings or errors, parsing will continue if possible.
+// The most severe issue found is returned.
+//
+// Spec: https://fasm.readthedocs.io/en/latest/specification/syntax.html
+inline ParseResult parse(std::string_view content, FILE *errstream,
+                         const ParseCallback &parse_callback);
+
+// -- End of API interface; rest is implementation details
 
 #define skip_white() while (*it == ' ' || *it == '\t') ++it
 #define skip_to_eol() while (*it != '\n') ++it
@@ -58,15 +77,8 @@ enum class ParseResult {
     } else                                                                     \
       v = v * 8 + (*it - '0')
 
-// Parse FPGA assembly file, send parsed values to "parse_callback".
-// The "content" is the buffer to parse; last line needs to end with a newline.
-// Errors/Warnings are reported to "errstream".
-// Attributes are not handled and skipped gracefully.
-//
-// If there are warnings or errors, parsing will continue if possible.
-// The most severe issue found is returned.
-inline ParseResult fasm_parse(std::string_view content, FILE *errstream,
-                              const FasmParseCallback &parse_callback) {
+inline ParseResult parse(std::string_view content, FILE *errstream,
+                         const ParseCallback &parse_callback) {
   if (content.empty()) {
     return ParseResult::kSuccess;
   }
@@ -247,4 +259,5 @@ inline ParseResult fasm_parse(std::string_view content, FILE *errstream,
 #undef skip_to_eol
 #undef skip_white
 
+}  // namespace fasm
 #endif  // SIMPLE_FASM_PARSE_H

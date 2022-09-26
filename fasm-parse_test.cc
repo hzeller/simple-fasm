@@ -3,18 +3,20 @@
 
 #include "fasm-parse.h"
 
+using fasm::ParseResult;
+
 // Make ParseResult printable so that we can use it in test outputs.
-std::ostream &operator<<(std::ostream &o, ParseResult r) {
+std::ostream &operator<<(std::ostream &o, fasm::ParseResult r) {
   switch (r) {
-  case ParseResult::kSuccess:
+  case fasm::ParseResult::kSuccess:
     return o << "Success";
-  case ParseResult::kInfo:
+  case fasm::ParseResult::kInfo:
     return o << "Info";
-  case ParseResult::kNonCritical:
+  case fasm::ParseResult::kNonCritical:
     return o << "NonCritical";
-  case ParseResult::kSkipped:
+  case fasm::ParseResult::kSkipped:
     return o << "Skipped";
-  case ParseResult::kError:
+  case fasm::ParseResult::kError:
     return o << "Error";
   }
   return o;
@@ -31,7 +33,7 @@ static int expect_mismatch_count = 0;
 struct TestCase {
   std::string_view input;
   // Expected outputs
-  ParseResult result;
+  fasm::ParseResult result;
   std::string_view feature_name;
   int min_bit;
   int width;
@@ -124,14 +126,14 @@ void Test() {
 
   for (const TestCase &expected : tests) {
     auto result =
-      fasm_parse(expected.input, stderr,
-                 [&expected](uint32_t, std::string_view n, int min_bit,
-                             int width, uint64_t bits) {
-                   EXPECT_EQ(n, expected.feature_name) << expected.input;
-                   EXPECT_EQ(min_bit, expected.min_bit) << expected.input;
-                   EXPECT_EQ(width, expected.width) << expected.input;
-                   EXPECT_EQ(bits, expected.bits) << expected.input;
-                 });
+        fasm::parse(expected.input, stderr,
+                    [&expected](uint32_t, std::string_view n, int min_bit,
+                                int width, uint64_t bits) {
+                      EXPECT_EQ(n, expected.feature_name) << expected.input;
+                      EXPECT_EQ(min_bit, expected.min_bit) << expected.input;
+                      EXPECT_EQ(width, expected.width) << expected.input;
+                      EXPECT_EQ(bits, expected.bits) << expected.input;
+                    });
     EXPECT_EQ(result, expected.result) << expected.input;
   }
 }
