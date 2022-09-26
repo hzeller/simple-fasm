@@ -153,18 +153,18 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
     }
     skip_white();
 
-    const uint32_t width = (max_bit - min_bit + 1);
+    uint32_t width = (max_bit - min_bit + 1);
     if (width > 64) {
       // TODO: if this happens in practice, then parse in multiple steps and
       // call back multiple times with parts of the number.
       fprintf(errstream,
               "%u: ERR: Sorry, can only deal with ranges <= 64 bit currently "
-              "%.*s[%d:%d]; width %u\n",
+              "%.*s[%d:%d]; trimming width %u to 64\n",
               line_number, (int)feature.size(), feature.data(), max_bit,
               min_bit, width);
       result = std::max(result, ParseResult::kError);
-      skip_to_eol();
-      continue;
+      width = 64;  // Clamp number of bits we report.
+      // Move on with best effort parsing of lower 64 bits.
     }
 
     // Assignment.

@@ -106,6 +106,14 @@ void Test() {
       {"BRACKET_MISSING[4:0xyz\n", ParseResult::kError, //
        "", 0, 0, 0},                                    // Callback never called
 
+      // Numbers longer than 64 bit can not be dealt with, only best effort
+      // parse
+      {"VERY_LONG_NOT_SUPPORTED[255:0] = 256'h1\n", ParseResult::kError,
+       "VERY_LONG_NOT_SUPPORTED", 0, 64, 1}, // Short enough to parse complete
+      {"BEST_EFFORT[127:0] = 128'hdeadbeef_deadbeef_c0feface_1337f00d\n",
+       ParseResult::kError,                       //
+       "BEST_EFFORT", 0, 64, 0xc0feface1337f00d}, // Truncated
+
       // Attempt to assign too wide number; warn but comes back properly shaved
       {"ASSIGN_HEX[15:0] = 32'hcafebabe\n", ParseResult::kNonCritical,
        "ASSIGN_HEX", 0, 16, 0xbabe},
@@ -125,16 +133,21 @@ void Test() {
   };
 
   for (const TestCase &expected : tests) {
+    bool was_called = false;
     auto result =
         fasm::parse(expected.input, stderr,
-                    [&expected](uint32_t, std::string_view n, int min_bit,
-                                int width, uint64_t bits) {
+                    [&](uint32_t, std::string_view n, int min_bit,
+                        int width, uint64_t bits) {
+                      was_called = true;
                       EXPECT_EQ(n, expected.feature_name) << expected.input;
                       EXPECT_EQ(min_bit, expected.min_bit) << expected.input;
                       EXPECT_EQ(width, expected.width) << expected.input;
                       EXPECT_EQ(bits, expected.bits) << expected.input;
                     });
     EXPECT_EQ(result, expected.result) << expected.input;
+    // If the expected the callback to be called, the expect data will have
+    // a width != 0.
+    EXPECT_EQ(was_called, (expected.width != 0)) << expected.input;
   }
 }
 
