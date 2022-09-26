@@ -225,7 +225,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
       }
     }
 
-    bitset &= (uint64_t(1) << width) - 1;  // Clamp bits
+    bitset &= uint64_t(-1) >> (64 - width); // Clamp bits.
 
     if (*it == '{') {
       fprintf(errstream, "%u: INFO ignored attributes for '%.*s'\n",

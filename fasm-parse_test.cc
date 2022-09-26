@@ -114,6 +114,10 @@ void Test() {
        ParseResult::kError,                       //
        "BEST_EFFORT", 0, 64, 0xc0feface1337f00d}, // Truncated
 
+      // Examples from README.
+      {"FOO[255:192] = 42\n", ParseResult::kSuccess, "FOO", 192, 64, 42},
+      {"BAR[255:0] = 42\n", ParseResult::kError, "BAR", 0, 64, 42},
+
       // Attempt to assign too wide number; warn but comes back properly shaved
       {"ASSIGN_HEX[15:0] = 32'hcafebabe\n", ParseResult::kNonCritical,
        "ASSIGN_HEX", 0, 16, 0xbabe},

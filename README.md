@@ -4,6 +4,10 @@ Simple FPGA assembler file format parser
 Very simple [single-header](./fasm-parse.h) implementation of a parser for the
 [fasm] FPGA assembler format.
 
+Attributes are not supported yet and skipped gracefully. Also, bit range
+span in a feature assignment is limited to 64 bits currently
+(e.g. `FOO[255:192]` is ok, `BAR[255:0]` is too wide).
+
 ## API
 
 ```c++
