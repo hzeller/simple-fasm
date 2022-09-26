@@ -64,7 +64,7 @@ fasm file. By default it creates 100M lines, about 3.6GiB of data:
 
 Speed is somewhat acceptable.
 
-On an old i7-7500U laptop this parses more than 600MiB/s on a single core:
+On an old i7-7500U laptop this parses more than 700MiB/s on a single core:
 
 ```
 $ ./fasm-validation-parse /tmp/dummy.fasm
