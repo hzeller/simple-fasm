@@ -57,6 +57,11 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
 
 // -- End of API interface; rest is implementation details
 
+// [[unlikely]] only available since c++20, s use gcc/clang extension here.
+#ifndef unlikely
+#define unlikely(x) __builtin_expect((x), 0)
+#endif
+
 #define skip_white() while (*it == ' ' || *it == '\t') ++it
 #define skip_to_eol() while (*it != '\n') ++it
 
@@ -148,7 +153,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
       } else {
         min_bit = max_bit;
       }
-      if (*it != ']') {
+      if (unlikely(*it != ']')) {
         fprintf(errstream, "%u: ERR expected ']' : '%.*s'\n", line_number,
                 int(it + 1 - start_feature), start_feature);
         skip_to_eol(); // skip to next line.
@@ -157,7 +162,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
         continue;
       }
       ++it;
-      if (max_bit < min_bit) {
+      if (unlikely(max_bit < min_bit)) {
         fprintf(errstream, "%u: SKIP inverted range %.*s[%d:%d]\n", line_number,
                 (int)feature.size(), feature.data(), max_bit, min_bit);
         skip_to_eol(); // skip to next line.
@@ -168,7 +173,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
     skip_white();
 
     uint32_t width = (max_bit - min_bit + 1);
-    if (width > 64) {
+    if (unlikely(width > 64)) {
       // TODO: if this happens in practice, then parse in multiple steps and
       // call back multiple times with parts of the number.
       fprintf(errstream,
@@ -192,7 +197,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
       skip_white();
       if (*it == '\'') {
         // Ok, that was actually precision. simple test, but ignore it mostly.
-        if (bitset > width) {
+        if (unlikely(bitset > width)) {
           fprintf(errstream,
                   "%u: WARN Attempt to assign more bits (%" PRIu64 "') for "
                   "%.*s[%d:%d] with supported bit width of %u\n",
@@ -230,7 +235,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
       }
     } else {
       bitset = 0x1; // assignment fallback: default assumption 1 bit set.
-      if (min_bit != max_bit) {
+      if (unlikely(min_bit != max_bit)) {
         fprintf(errstream,
                 "%u: INFO Range of bits %.*s[%d:%d], but no assignment\n",
                 line_number, (int)feature.size(), feature.data(), max_bit,
@@ -253,7 +258,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
     if (*it == '#') {
       skip_to_eol();
     }
-    if (*it != '\n') {
+    if (unlikely(*it != '\n')) {
       fprintf(errstream, "%d: unexpected non-newline: '%c'\n", line_number,
               *it);
       result = std::max(result, ParseResult::kError);
@@ -272,6 +277,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
 #undef read_decimal
 #undef skip_to_eol
 #undef skip_white
+#undef unlikely
 
 }  // namespace fasm
 #endif  // SIMPLE_FASM_PARSE_H
