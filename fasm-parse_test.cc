@@ -94,6 +94,10 @@ void Test() {
        "ASSIGN_DECIMAL", 0, 4, 5},
       {"ASSIGN_DECIMAL[3:0] = 4'd5\n", ParseResult::kSuccess, //
        "ASSIGN_DECIMAL", 0, 4, 5},
+      // Invalid digit at end.
+      {"ASSIGN_BROKEN_DEC[7:0] = 4'd5a\n", ParseResult::kError, //
+       "ASSIGN_BROKEN_DEC", 0, 8, 5},
+
       {"ASSIGN_HEX1[15:0] = 16'hCa_Fe\n", ParseResult::kSuccess, //
        "ASSIGN_HEX1", 0, 16, 0xcafe},
       {"ASSIGN_HEX2[31:0] = 32'h_dead_beef\n", ParseResult::kSuccess, //
