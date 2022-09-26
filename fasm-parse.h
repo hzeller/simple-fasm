@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdint>
 #include <functional>
@@ -14,6 +15,14 @@
 using FasmParseCallback =
     std::function<void(uint32_t line, std::string_view feature, int start_bit,
                        int width, uint64_t bits)>;
+
+enum class ParseResult {
+  kSuccess,
+  kInfo,
+  kNonCritical,
+  kSkipped,
+  kError
+};
 
 #define skip_white() while (*it == ' ' || *it == '\t') ++it
 #define skip_to_eol() while (*it != '\n') ++it
@@ -52,19 +61,21 @@ using FasmParseCallback =
 // Parse FPGA assembly file, send parsed values to "parse_callback".
 // The "content" is the buffer to parse; last line needs to end with a newline.
 // Errors/Warnings are reported to "errstream".
-// Attributes are skipped.
+// Attributes are not handled and skipped gracefully.
 //
-// Returns 'true' on successfully parsing all lines.
-inline bool fasm_parse(std::string_view content, FILE *errstream,
-                       const FasmParseCallback &parse_callback) {
+// If there are warnings or errors, parsing will continue if possible.
+// The most severe issue found is returned.
+inline ParseResult fasm_parse(std::string_view content, FILE *errstream,
+                              const FasmParseCallback &parse_callback) {
   if (content.empty()) {
-    return true;
+    return ParseResult::kSuccess;
   }
   if (content[content.size() - 1] != '\n') {
     fprintf(errstream, "content does not end with a newline\n");
-    return false;
+    return ParseResult::kError;
   }
 
+  ParseResult result = ParseResult::kSuccess;
   const char *it = content.data();
   const char *const end = content.data() + content.size();
   uint32_t line_number = 0;
@@ -116,6 +127,7 @@ inline bool fasm_parse(std::string_view content, FILE *errstream,
                 int(it + 1 - start_feature), start_feature);
         skip_to_eol(); // skip to next line.
         ++it;
+        result = std::max(result, ParseResult::kError);
         continue;
       }
       ++it;
@@ -123,6 +135,7 @@ inline bool fasm_parse(std::string_view content, FILE *errstream,
         fprintf(errstream, "%u: SKIP inverted range %.*s[%d:%d]\n", line_number,
                 (int)feature.size(), feature.data(), max_bit, min_bit);
         skip_to_eol(); // skip to next line.
+        result = std::max(result, ParseResult::kSkipped);
         continue;
       }
     }
@@ -137,7 +150,9 @@ inline bool fasm_parse(std::string_view content, FILE *errstream,
               "%.*s[%d:%d]; width %u\n",
               line_number, (int)feature.size(), feature.data(), max_bit,
               min_bit, width);
-      return false;
+      result = std::max(result, ParseResult::kError);
+      skip_to_eol();
+      continue;
     }
 
     // Assignment.
@@ -157,6 +172,7 @@ inline bool fasm_parse(std::string_view content, FILE *errstream,
                   "%.*s[%d:%d] with supported bit width of %u\n",
                   line_number, bitset, (int)feature.size(), feature.data(),
                   max_bit, min_bit, width);
+          result = std::max(result, ParseResult::kNonCritical);
         }
         bitset = 0;
         ++it;
@@ -179,6 +195,7 @@ inline bool fasm_parse(std::string_view content, FILE *errstream,
         default:
           fprintf(errstream, "%u: unknown base signifier '%c'\n", line_number,
                   format_type);
+          result = std::max(result, ParseResult::kError);
           skip_to_eol();
           bitset = 0x01;
           break;
@@ -192,6 +209,7 @@ inline bool fasm_parse(std::string_view content, FILE *errstream,
                 "%u: INFO Range of bits %.*s[%d:%d], but no assignment\n",
                 line_number, (int)feature.size(), feature.data(), max_bit,
                 min_bit);
+        result = std::max(result, ParseResult::kInfo);
       }
     }
 
@@ -200,6 +218,7 @@ inline bool fasm_parse(std::string_view content, FILE *errstream,
     if (*it == '{') {
       fprintf(errstream, "%u: INFO ignored attributes for '%.*s'\n",
               line_number, (int)feature.size(), feature.data());
+      result = std::max(result, ParseResult::kInfo);
       skip_to_eol(); // attributes; not implemented yet.
       if (feature.empty()) continue;  // Global file annotation
       // Move on: as we still might have assigned bits to report in callback
@@ -211,13 +230,14 @@ inline bool fasm_parse(std::string_view content, FILE *errstream,
     if (*it != '\n') {
       fprintf(errstream, "%d: unexpected non-newline: '%c'\n", line_number,
               *it);
+      result = std::max(result, ParseResult::kError);
       skip_to_eol(); // skip to next line.
     }
     ++it;
 
     parse_callback(line_number, feature, min_bit, width, bitset);
   }
-  return true;
+  return result;
 }
 
 #undef read_octal
