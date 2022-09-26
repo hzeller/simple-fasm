@@ -60,9 +60,18 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
 // -- End of API interface; rest is implementation details
 
 namespace internal {
+// This look-up table maps ASCII characters to its integer value if it is a
+// digit; anything outside the range of a valid digit stops number parsing.
+//
+// To read numbers, we need to allow for 'underscore' being part of the
+// number as readability digit separator e.g. 32'h_dead_beef (Verilog numbers).
+//
 // -1    : digit separator ('_') -> ignore, but continue reading number
 // 0..15 : valid digit (can be used for conversions of all bases)
 // > 15  : not a valid digit, number parsing is finished.
+//
+// The separator being less than 0 allows a single comparison to decide if we
+// are in valid number territory (<= (number-base-max-value).
 // Since we need a number smaller than the smallest digit, need signed values.
 inline constexpr int8_t kDigitSeparator = -1;  // _less_ than any digit.
 inline constexpr int8_t kDigitToInt[256] = {
@@ -83,9 +92,29 @@ inline constexpr int8_t kDigitToInt[256] = {
     99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
     99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
 };
+
+// ASCII -> is valid identifier for the feature name.
+inline constexpr char kValidIdentifier[256] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, // dot
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, // digits
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // LETTERS
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, // LETTERS, ... underscore
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // letters
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+};
 } // namespace internal
 
-// [[unlikely]] only available since c++20, s use gcc/clang extension here.
+// [[unlikely]] only available since c++20, so use gcc/clang extension here.
 #ifndef unlikely
 #define unlikely(x) __builtin_expect((x), 0)
 #endif
@@ -149,15 +178,12 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
       continue;
     }
 
-    // Read feature name; starting with letter or underscore
+    // Read feature name; look for sequence of valid characters.
+    // (we're a bit lenient if it starts with a non-alphanumeric character
+    // (dot, digit underscore) which is entirely sufficient for the parsing
+    // part. The receiver of the feature name will notice if it is a valid).
     const char *const start_feature = it;
-    while (*it == '_' || (*it >= 'a' && *it <= 'z') ||
-           (*it >= 'A' && *it <= 'Z')) {
-      ++it;
-    }
-    // Remaining identifier can contain dots and numbers.
-    while (*it == '.' || *it == '_' || (*it >= '0' && *it <= '9') ||
-           (*it >= 'a' && *it <= 'z') || (*it >= 'A' && *it <= 'Z')) {
+    while (internal::kValidIdentifier[(uint8_t)*it]) {
       ++it;
     }
     std::string_view feature{start_feature, size_t(it - start_feature)};

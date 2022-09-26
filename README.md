@@ -70,7 +70,7 @@ On an old i7-7500U laptop this parses more than 600MiB/s on a single core:
 $ ./fasm-validation-parse /tmp/dummy.fasm
 Parsing /tmp/dummy.fasm with 3784055505 Bytes.
 100000000 lines. XOR of all values: 230C2BE345D5860A
-5.751 seconds wall time. 627.5 MiB/s
+4.953 seconds wall time. 728.6 MiB/s
 ```
 
 [fasm]: https://fasm.readthedocs.io/
