@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Simple single-header parser for FPGA assembly file format.
+
 #ifndef SIMPLE_FASM_PARSE_H
 #define SIMPLE_FASM_PARSE_H
 
@@ -57,6 +59,32 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
 
 // -- End of API interface; rest is implementation details
 
+namespace internal {
+// -1    : digit separator ('_') -> ignore, but continue reading number
+// 0..15 : valid digit (can be used for conversions of all bases)
+// > 15  : not a valid digit, number parsing is finished.
+// Since we need a number smaller than the smallest digit, need signed values.
+inline constexpr int8_t kDigitSeparator = -1;  // _less_ than any digit.
+inline constexpr int8_t kDigitToInt[256] = {
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    00,  1,  2,  3,  4,  5,  6,  7,  8,  9, 99, 99, 99, 99, 99, 99,
+    99, 10, 11, 12, 13, 14, 15, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, kDigitSeparator,
+    99, 10, 11, 12, 13, 14, 15, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+};
+} // namespace internal
+
 // [[unlikely]] only available since c++20, s use gcc/clang extension here.
 #ifndef unlikely
 #define unlikely(x) __builtin_expect((x), 0)
@@ -67,34 +95,31 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
 
 #define read_decimal(v)                                                        \
   skip_white();                                                                \
-  for (/**/; (*it >= '0' && *it <= '9') || *it == '_'; ++it)                   \
-    if (*it == '_') {                                                          \
+  for (int8_t d; (d = internal::kDigitToInt[(uint8_t)*it]) <= 9; ++it)         \
+    if (d == internal::kDigitSeparator) {                                      \
     } else                                                                     \
-      v = v * 10 + (*it - '0')
+      v = v * 10 + d
 
 #define read_hex(v)                                                            \
   skip_white();                                                                \
-  for (/**/; (*it >= '0' && *it <= '9') || (*it >= 'a' && *it <= 'f') ||       \
-             (*it >= 'A' && *it <= 'F') || *it == '_';                         \
-       ++it)                                                                   \
-    if (*it == '_') {                                                          \
+  for (int8_t d; (d = internal::kDigitToInt[(uint8_t)*it]) <= 15; ++it)        \
+    if (d == internal::kDigitSeparator) {                                      \
     } else                                                                     \
-      v = v * 16 +                                                             \
-          (*it - ((*it <= '9') ? '0' : (((*it <= 'F') ? 'A' : 'a') - 10)))
+      v = v * 16 + d
 
 #define read_binary(v)                                                         \
   skip_white();                                                                \
-  for (/**/; (*it >= '0' && *it <= '1') || *it == '_'; ++it)                   \
-    if (*it == '_') {                                                          \
+  for (int8_t d; (d = internal::kDigitToInt[(uint8_t)*it]) <= 1; ++it)         \
+    if (d == internal::kDigitSeparator) {                                      \
     } else                                                                     \
-      v = v * 2 + (*it - '0')
+      v = v * 2 + d
 
 #define read_octal(v)                                                          \
   skip_white();                                                                \
-  for (/**/; (*it >= '0' && *it <= '7') || *it == '_'; ++it)                   \
-    if (*it == '_') {                                                          \
+  for (int8_t d; (d = internal::kDigitToInt[(uint8_t)*it]) <= 7; ++it)         \
+    if (d == internal::kDigitSeparator) {                                      \
     } else                                                                     \
-      v = v * 8 + (*it - '0')
+      v = v * 8 + d
 
 inline ParseResult parse(std::string_view content, FILE *errstream,
                          const ParseCallback &parse_callback) {
@@ -191,8 +216,8 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
       ++it;
       skip_white();
       bitset = 0;
-      if (*it >= '0' && *it <= '9') { // Could be precision or decimal value
-        read_decimal(bitset);
+      if (internal::kDigitToInt[(uint8_t)*it] <= 9) {
+        read_decimal(bitset);   // Could be precision or decimal value
       }
       skip_white();
       if (*it == '\'') {

@@ -62,16 +62,15 @@ fasm file. By default it creates 100M lines, about 3.6GiB of data:
 ./fasm-generate-testfile > /tmp/dummy.fasm
 ```
 
-The implementation is not optimized yet, but the parse speed looks
-promising:
+Speed is somewhat acceptable.
 
-On an old i7-7500U laptop this parses at about 400MiB/s on a single core:
+On an old i7-7500U laptop this parses more than 600MiB/s on a single core:
 
 ```
 $ ./fasm-validation-parse /tmp/dummy.fasm
 Parsing /tmp/dummy.fasm with 3784055505 Bytes.
 100000000 lines. XOR of all values: 230C2BE345D5860A
-8.781 seconds wall time. 411.0 MiB/s
+5.751 seconds wall time. 627.5 MiB/s
 ```
 
 [fasm]: https://fasm.readthedocs.io/
