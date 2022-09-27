@@ -28,9 +28,11 @@
 namespace fasm {
 // Parse callback for FASM lines. The "feature" found in line number "line"
 // is set the values given in "bits", starting from lowest "start_bit" (lsb)
-// with given "width"
+// with given "width".
+// Returns 'true' if it wants to continue get callbacks or 'false' if it
+// wants the parsing to abort.
 using ParseCallback =
-    std::function<void(uint32_t line, std::string_view feature, int start_bit,
+    std::function<bool(uint32_t line, std::string_view feature, int start_bit,
                        int width, uint64_t bits)>;
 
 // Result values in increasing amount of severity. Start to worry at kSkipped.
@@ -39,6 +41,7 @@ enum class ParseResult {
   kInfo,        // Got info messages, mostly FYI
   kNonCritical, // Found strange values, but mostly non-critical FYI
   kSkipped,     // There were lines that had to be skipped.
+  kUserAbort,   // The callback returned 'false' to abort.
   kError        // Errornous input
 };
 
@@ -192,7 +195,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
       if (fasm_unlikely(*it != ']')) {
         fprintf(errstream, "%u: ERR expected ']' : '%.*s'\n", line_number,
                 int(it + 1 - start_feature), start_feature);
-        result = std::max(result, ParseResult::kError);
+        result = ParseResult::kError;
         fasm_skip_to_start_of_next_line();
         continue;
       }
@@ -216,7 +219,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
               "%.*s[%d:%d]; trimming width %u to 64\n",
               line_number, (int)feature.size(), feature.data(), max_bit,
               min_bit, width);
-      result = std::max(result, ParseResult::kError);
+      result = ParseResult::kError;
       width = 64;  // Clamp number of bits we report.
       // Move foward, doing best effort parsing of lower 64 bits.
     }
@@ -253,7 +256,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
         default:
           fprintf(errstream, "%u: unknown base signifier '%c'; expected "
                   "one of b, d, h, o\n", line_number, format_type);
-          result = std::max(result, ParseResult::kError);
+          result = ParseResult::kError;
           fasm_skip_to_eol();
           bitset = 0x01;  // In error state now, but report this feature as set
           break;
@@ -290,17 +293,21 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
     }
     if (fasm_unlikely(*it != '\n')) {
       fprintf(errstream, "%d: expected newline, got '%c'\n", line_number, *it);
-      result = std::max(result, ParseResult::kError);
+      result = ParseResult::kError;
       fasm_skip_to_eol();
     }
     ++it;  // Get ready for next line and position there.
 
-    parse_callback(line_number, feature, min_bit, width, bitset);
+    if (!parse_callback(line_number, feature, min_bit, width, bitset)) {
+      result = std::max(result, ParseResult::kUserAbort);
+      break;
+    }
   }
   return result;
 }
 
 #undef fasm_parse_number_with_base
+#undef fasm_skip_to_start_of_next_line
 #undef fasm_skip_to_eol
 #undef fasm_skip_blank
 #undef fasm_unlikely

@@ -30,6 +30,8 @@ std::ostream &operator<<(std::ostream &o, fasm::ParseResult r) {
     return o << "NonCritical";
   case fasm::ParseResult::kSkipped:
     return o << "Skipped";
+  case fasm::ParseResult::kUserAbort:
+    return o << "UserAbort";
   case fasm::ParseResult::kError:
     return o << "Error";
   }
@@ -165,6 +167,7 @@ void Test() {
                       EXPECT_EQ(min_bit, expected.min_bit) << expected.input;
                       EXPECT_EQ(width, expected.width) << expected.input;
                       EXPECT_EQ(bits, expected.bits) << expected.input;
+                      return true;
                     });
     EXPECT_EQ(result, expected.result) << expected.input;
     // If the expected the callback to be called, the expect data will have

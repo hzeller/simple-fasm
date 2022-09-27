@@ -23,9 +23,11 @@ with bit-patterns to be set.
 ```c++
 // Parse callback for FASM lines. The "feature" found in line number "line"
 // is set the values given in "bits", starting from lowest "start_bit" (lsb)
-// with given "width"
+// with given "width".
+// Returns 'true' if it wants to continue get callbacks or 'false' if it
+// wants the parsing to abort.
 using ParseCallback =
-    std::function<void(uint32_t line, std::string_view feature, int start_bit,
+    std::function<bool(uint32_t line, std::string_view feature, int start_bit,
                        int width, uint64_t bits)>;
 
 // Result values in increasing amount of severity. Start to worry at kSkipped.
@@ -34,6 +36,7 @@ enum class ParseResult {
   kInfo,        // Got info messages, mostly FYI
   kNonCritical, // Found strange values, but mostly non-critical FYI
   kSkipped,     // There were lines that had to be skipped.
+  kUserAbort,   // The callback returned 'false' to abort.
   kError        // Errornous input
 };
 

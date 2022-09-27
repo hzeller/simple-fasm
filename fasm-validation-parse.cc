@@ -48,14 +48,16 @@ ParseStatistics ParseContent(std::string_view content) {
       [&stats](uint32_t line, std::string_view, int, int, uint64_t bits) {
         stats.accumulate ^= bits;
         stats.last_line = line;
+        return true;
       });
   return stats;
 }
 
+// Useful upper bound.
+static const int kMaxThreads = 2 * std::thread::hardware_concurrency();
 int GetThreadNumberToUse() {
   const char *const parallel_env = getenv("PARALLEL_FASM");
-  return std::clamp(parallel_env ? atoi(parallel_env) : 1, 1,
-                    2 * (int)std::thread::hardware_concurrency());
+  return std::clamp(parallel_env ? atoi(parallel_env) : 1, 1, kMaxThreads);
 }
 
 // Parse file and print number of lines and performance report.
@@ -140,7 +142,7 @@ int main(int argc, char *argv[]) {
   if (argc < 2) {
     printf("usage: %s <fasm-file> [<fasm-file>...]\n\tReads PARALLEL_FASM "
            "environment variable for #threads to use [1..%d].\n",
-           argv[0], 2 * (int)std::thread::hardware_concurrency());
+           argv[0], kMaxThreads);
     return 1;
   }
 
