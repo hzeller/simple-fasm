@@ -298,7 +298,8 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
     }
     ++it;  // Get ready for next line and position there.
 
-    if (!parse_callback(line_number, feature, min_bit, width, bitset)) {
+    if (fasm_unlikely(
+            !parse_callback(line_number, feature, min_bit, width, bitset))) {
       result = std::max(result, ParseResult::kUserAbort);
       break;
     }

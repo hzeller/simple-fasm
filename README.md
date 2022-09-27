@@ -101,7 +101,7 @@ on a single core:
 $ ./fasm-validation-parse /tmp/dummy.fasm
 Parsing /tmp/dummy.fasm with 3784055505 Bytes.
 100000000 lines. XOR of all values: 230C2BE345D5860A
-1 thread. 5.039s wall time. 716.1 MiB/s
+1 thread. 4.792s wall time. 753.0 MiB/s, 20.9 MLines/s
 ```
 
 Since files can be split at line-boundaries, it is also possible to parse
@@ -115,7 +115,7 @@ On this Ryzen 1950X, this reaches > 16 GiB/s parse speed:
 $ PARALLEL_FASM=32 ./fasm-validation-parse /tmp/dummy.fasm
 Parsing /tmp/dummy.fasm with 3784055505 Bytes.
 100000000 lines. XOR of all values: 230C2BE345D5860A
-32 threads. 0.210s wall time. 17190.6 MiB/s
+32 threads. 0.206s wall time. 17550.6 MiB/s; 486.3 MLines/s
 ```
 
 This just parsed 100 Million FASM lines with address ranges and hex-number

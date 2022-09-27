@@ -130,9 +130,9 @@ fasm::ParseResult ParseFile(const char *fasm_file, int thread_count) {
           combined.last_line, combined.accumulate);
   constexpr float MiBFactor = 1e6 / (1 << 20);
   const float bytes_per_microsecond = 1.0f * file_size / duration_us;
-  fprintf(stdout, "%d thread%s. %.3fs wall time. %.1f MiB/s\n", thread_count,
-          thread_count > 1 ? "s" : "", duration_us / 1e6,
-          bytes_per_microsecond * MiBFactor);
+  fprintf(stdout, "%d thread%s. %.3fs wall time. %.1f MiB/s; %.1f MLines/s\n",
+          thread_count, thread_count > 1 ? "s" : "", duration_us / 1e6,
+          bytes_per_microsecond * MiBFactor, 1.0*combined.last_line / duration_us);
   munmap(buffer, file_size);
 
   return combined.result;
