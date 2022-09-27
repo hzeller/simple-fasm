@@ -33,6 +33,7 @@ using ParseCallback =
     std::function<void(uint32_t line, std::string_view feature, int start_bit,
                        int width, uint64_t bits)>;
 
+// Result values in increasing amount of severity. Start to worry at kSkipped.
 enum class ParseResult {
   kSuccess,     // Successful parse
   kInfo,        // Got info messages, mostly FYI
@@ -63,15 +64,15 @@ namespace internal {
 // This look-up table maps ASCII characters to its integer value if it is a
 // digit; anything outside the range of a valid digit stops number parsing.
 //
-// To read numbers, we need to allow for 'underscore' being part of the
+// To parse numbers, we need to allow for 'underscore' being part of the
 // number as readability digit separator e.g. 32'h_dead_beef (Verilog numbers).
 //
 // -1    : digit separator ('_') -> ignore, but continue reading number
-// 0..15 : valid digit (can be used for conversions of all bases)
+// 0..15 : valid digit (can be used for conversions of bases 2..16)
 // > 15  : not a valid digit, number parsing is finished.
 //
 // The separator being less than 0 allows a single comparison to decide if we
-// are in valid number territory (<= (number-base-max-value).
+// are in valid number territory (< base)
 // Since we need a number smaller than the smallest digit, need signed values.
 inline constexpr int8_t kDigitSeparator = -1;  // _less_ than any digit.
 inline constexpr int8_t kDigitToInt[256] = {
@@ -112,17 +113,23 @@ inline constexpr char kValidIdentifier[256] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
 };
-} // namespace internal
+}  // namespace internal
 
-// [[unlikely]] only available since c++20, so use gcc/clang extension here.
-#ifndef unlikely
-#define unlikely(x) __builtin_expect((x), 0)
-#endif
+// [[unlikely]] only available since c++20, so use gcc/clang builtin here.
+#define fasm_unlikely(x) __builtin_expect((x), 0)
 
-#define fasm_skip_white() while (*it == ' ' || *it == '\t') ++it
+// Skip until we hit the first non-blank char (EOL '\n' not considered blank)
+#define fasm_skip_blank() while (*it == ' ' || *it == '\t') ++it
+
+// Skip forward until we sit on the '\n' end of current line.
 #define fasm_skip_to_eol() while (*it != '\n') ++it
+
+// Skip forward beyond the end of current line. To be used before 'continue'.
+#define fasm_skip_to_start_of_next_line() fasm_skip_to_eol(); ++it
+
+// Parse number with given base (any base between 2 and 16 is supported)
 #define fasm_parse_number_with_base(v, base)                                   \
-  fasm_skip_white();                                                           \
+  fasm_skip_blank();                                                           \
   for (int8_t d; (d = internal::kDigitToInt[(uint8_t)*it]) < (base); ++it)     \
     if (d == internal::kDigitSeparator) {                                      \
     } else                                                                     \
@@ -134,6 +141,7 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
     return ParseResult::kSuccess;
   }
   if (content[content.size() - 1] != '\n') {
+    // We need '\n' as sentinel, so without it, we'd run past the buffer.
     fprintf(errstream, "content does not end with a newline\n");
     return ParseResult::kError;
   }
@@ -145,65 +153,63 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
   uint64_t bitset;
   while (it < end) {
     ++line_number;
-    fasm_skip_white();
+    fasm_skip_blank();
     if (*it == '\n') {
       ++it;
       continue;
     }
     if (*it == '#') {
-      fasm_skip_to_eol();
-      ++it;
+      fasm_skip_to_start_of_next_line();
       continue;
     }
 
     // Read feature name; look for sequence of valid characters.
-    // (we're a bit lenient if it starts with a non-alphanumeric character
-    // (dot, digit underscore) which is entirely sufficient for the parsing
-    // part. The receiver of the feature name will notice if it is a valid).
+    // We are a bit lenient if it starts with a non-alphanumeric character
+    // (dot, digit, or underscore) which is entirely sufficient for the parsing
+    // part. The receiver of the feature name will notice semantic issues.
     const char *const start_feature = it;
     while (internal::kValidIdentifier[(uint8_t)*it]) {
       ++it;
     }
     std::string_view feature{start_feature, size_t(it - start_feature)};
 
-    fasm_skip_white();
+    fasm_skip_blank();
 
-    // Read optional bit width.
+    // Read optional feature address and determine width. feature[<max>:<min>]
     int max_bit = 0;
     int min_bit = 0;
     if (*it == '[') {
       ++it;
       fasm_parse_number_with_base(max_bit, 10);
-      fasm_skip_white();
+      fasm_skip_blank();
       if (*it == ':') {
         ++it;
         fasm_parse_number_with_base(min_bit, 10);
-        fasm_skip_white();
+        fasm_skip_blank();
       } else {
         min_bit = max_bit;
       }
-      if (unlikely(*it != ']')) {
+      if (fasm_unlikely(*it != ']')) {
         fprintf(errstream, "%u: ERR expected ']' : '%.*s'\n", line_number,
                 int(it + 1 - start_feature), start_feature);
-        fasm_skip_to_eol(); // skip to next line.
-        ++it;
         result = std::max(result, ParseResult::kError);
+        fasm_skip_to_start_of_next_line();
         continue;
       }
       ++it;
-      if (unlikely(max_bit < min_bit)) {
+      if (fasm_unlikely(max_bit < min_bit)) {
         fprintf(errstream, "%u: SKIP inverted range %.*s[%d:%d]\n", line_number,
                 (int)feature.size(), feature.data(), max_bit, min_bit);
-        fasm_skip_to_eol(); // skip to next line.
         result = std::max(result, ParseResult::kSkipped);
+        fasm_skip_to_start_of_next_line();
         continue;
       }
     }
-    fasm_skip_white();
+    fasm_skip_blank();
 
     uint32_t width = (max_bit - min_bit + 1);
-    if (unlikely(width > 64)) {
-      // TODO: if this happens in practice, then parse in multiple steps and
+    if (fasm_unlikely(width > 64)) {
+      // TODO: if this is needed in practice, then parse in multiple steps and
       // call back multiple times with parts of the number.
       fprintf(errstream,
               "%u: ERR: Sorry, can only deal with ranges <= 64 bit currently "
@@ -212,21 +218,23 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
               min_bit, width);
       result = std::max(result, ParseResult::kError);
       width = 64;  // Clamp number of bits we report.
-      // Move on with best effort parsing of lower 64 bits.
+      // Move foward, doing best effort parsing of lower 64 bits.
     }
 
     // Assignment.
     if (*it == '=') {
       ++it;
-      fasm_skip_white();
+      fasm_skip_blank();
       bitset = 0;
       if (internal::kDigitToInt[(uint8_t)*it] <= 9) {
-        fasm_parse_number_with_base(bitset, 10);   // precision or dec value
+        fasm_parse_number_with_base(bitset, 10);  // precision or decimal value
       }
-      fasm_skip_white();
+      fasm_skip_blank();
       if (*it == '\'') {
-        // Ok, that was actually precision. simple test, but ignore it mostly.
-        if (unlikely(bitset > width)) {
+        ++it;
+        fasm_skip_blank();
+        // Last number was actually precision. Simple plausibility, but ignore.
+        if (fasm_unlikely(bitset > width)) {
           fprintf(errstream,
                   "%u: WARN Attempt to assign more bits (%" PRIu64 "') for "
                   "%.*s[%d:%d] with supported bit width of %u\n",
@@ -235,36 +243,26 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
           result = std::max(result, ParseResult::kNonCritical);
         }
         bitset = 0;
-        ++it;
-        fasm_skip_white();
         const char format_type = *it;
         ++it;
         switch (format_type) {
-        case 'h':
-          fasm_parse_number_with_base(bitset, 16);
-          break;
-        case 'b':
-          fasm_parse_number_with_base(bitset, 2);
-          break;
-        case 'o':
-          fasm_parse_number_with_base(bitset, 8);
-          break;
-        case 'd':
-          fasm_parse_number_with_base(bitset, 10);
-          break;
+        case 'h': fasm_parse_number_with_base(bitset, 16); break;
+        case 'b': fasm_parse_number_with_base(bitset, 2);  break;
+        case 'o': fasm_parse_number_with_base(bitset, 8);  break;
+        case 'd': fasm_parse_number_with_base(bitset, 10); break;
         default:
           fprintf(errstream, "%u: unknown base signifier '%c'; expected "
                   "one of b, d, h, o\n", line_number, format_type);
           result = std::max(result, ParseResult::kError);
           fasm_skip_to_eol();
-          bitset = 0x01;
+          bitset = 0x01;  // In error state now, but report this feature as set
           break;
         }
-        fasm_skip_white();
+        fasm_skip_blank();
       }
     } else {
-      bitset = 0x1; // assignment fallback: default assumption 1 bit set.
-      if (unlikely(min_bit != max_bit)) {
+      bitset = 0x1;  // No assignment: default assumption 1 bit set.
+      if (fasm_unlikely(min_bit != max_bit)) {
         fprintf(errstream,
                 "%u: INFO Range of bits %.*s[%d:%d], but no assignment\n",
                 line_number, (int)feature.size(), feature.data(), max_bit,
@@ -273,27 +271,29 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
       }
     }
 
-    bitset &= uint64_t(-1) >> (64 - width); // Clamp bits.
+    bitset &= uint64_t(-1) >> (64 - width);  // Clamp bits if value too wide
 
     if (*it == '{') {
       fprintf(errstream, "%u: INFO ignored attributes for '%.*s'\n",
               line_number, (int)feature.size(), feature.data());
       result = std::max(result, ParseResult::kInfo);
-      fasm_skip_to_eol(); // attributes; not implemented yet.
-      if (feature.empty()) continue;  // Global file annotation
-      // Move on: as we still might have assigned bits to report in callback
+      fasm_skip_to_eol(); // Attributes: not implemented yet. Skip gracefully.
+      if (feature.empty()) { // no feature: this is a global file annotation
+        ++it;  // forward to start of next line
+        continue;
+      }
+      // Move forward as we still have feature+bits to report in callback
     }
 
     if (*it == '#') {
       fasm_skip_to_eol();
     }
-    if (unlikely(*it != '\n')) {
-      fprintf(errstream, "%d: unexpected non-newline: '%c'\n", line_number,
-              *it);
+    if (fasm_unlikely(*it != '\n')) {
+      fprintf(errstream, "%d: expected newline, got '%c'\n", line_number, *it);
       result = std::max(result, ParseResult::kError);
-      fasm_skip_to_eol(); // skip to next line.
+      fasm_skip_to_eol();
     }
-    ++it;
+    ++it;  // Get ready for next line and position there.
 
     parse_callback(line_number, feature, min_bit, width, bitset);
   }
@@ -302,8 +302,8 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
 
 #undef fasm_parse_number_with_base
 #undef fasm_skip_to_eol
-#undef fasm_skip_white
-#undef unlikely
+#undef fasm_skip_blank
+#undef fasm_unlikely
 
 }  // namespace fasm
 #endif  // SIMPLE_FASM_PARSE_H
