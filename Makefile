@@ -11,6 +11,9 @@ test: fasm-parse_test
 fasm-parse_test.o: fasm-parse.h
 fasm-validation-parse.o: fasm-parse.h
 
+fasm-validation-parse: fasm-validation-parse.o
+	$(CXX) -o $@ $^ -lpthread
+
 % : %.o
 	$(CXX) -o $@ $^
 

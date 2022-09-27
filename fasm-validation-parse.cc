@@ -38,10 +38,28 @@ int64_t getTimeInMicros() {
 struct ParseStatistics {
   uint64_t accumulate = 0;
   uint32_t last_line = 0;
+  fasm::ParseResult result = fasm::ParseResult::kSuccess;
 };
 
+ParseStatistics ParseContent(std::string_view content) {
+  ParseStatistics stats;
+  stats.result = fasm::parse(
+      content, stderr,
+      [&stats](uint32_t line, std::string_view, int, int, uint64_t bits) {
+        stats.accumulate ^= bits;
+        stats.last_line = line;
+      });
+  return stats;
+}
+
+int GetThreadNumberToUse() {
+  const char *const parallel_env = getenv("PARALLEL_FASM");
+  return std::clamp(parallel_env ? atoi(parallel_env) : 1, 1,
+                    2 * (int)std::thread::hardware_concurrency());
+}
+
 // Parse file and print number of lines and performance report.
-fasm::ParseResult ParseFile(const char *fasm_file) {
+fasm::ParseResult ParseFile(const char *fasm_file, int thread_count) {
   const int fd = open(fasm_file, O_RDONLY);
   if (fd < 0) {
     perror("Can't open file");
@@ -68,38 +86,70 @@ fasm::ParseResult ParseFile(const char *fasm_file) {
   }
 
   std::string_view content((const char *)buffer, file_size);
+  if (content[content.size() - 1] != '\n') {
+    fprintf(stdout, "File does not end in a newline\n");
+    return fasm::ParseResult::kError;
+  }
+
+  // Split this into chunks at newline boundaries to be processed in parallel.
+  std::vector<std::string_view> chunks(thread_count);
+  for (std::string_view &chunk : chunks) {
+    size_t pos = std::min(content.size(), file_size / thread_count) - 1;
+    while (content[pos] != '\n') { // find next fasm line boundary
+      ++pos;
+    }
+    chunk = content.substr(0, pos + 1);
+    content = content.substr(pos + 1);
+  }
+  assert(content.size() == 0);  // Everything divided into chunks now.
+
+  std::vector<std::thread *> threads(thread_count);
+  std::vector<ParseStatistics> results(thread_count);
+
   const int64_t start_us = getTimeInMicros();
-  ParseStatistics stats;
-  fasm::ParseResult result = fasm::parse(
-    content, stderr,
-    [&stats](uint32_t line, std::string_view, int, int, uint64_t bits) {
-      stats.accumulate ^= bits;
-      stats.last_line = line;
+  for (int i = 0; i < thread_count; ++i) {
+    threads[i] = new std::thread([&results, &chunks, i]() { //
+      results[i] = ParseContent(chunks[i]);
     });
+  }
+  for (std::thread *thread : threads) {
+    thread->join();
+    delete thread;
+  }
   const int64_t duration_us = getTimeInMicros() - start_us;
 
+  ParseStatistics combined;
+  for (const ParseStatistics &thread_result : results) {
+    combined.accumulate ^= thread_result.accumulate;
+    combined.last_line += thread_result.last_line;
+    combined.result = std::max(combined.result, thread_result.result);
+  }
   fprintf(stdout, "%d lines. XOR of all values: %" PRIX64 "\n",
-          stats.last_line, stats.accumulate);
+          combined.last_line, combined.accumulate);
   constexpr float MiBFactor = 1e6 / (1 << 20);
   const float bytes_per_microsecond = 1.0f * file_size / duration_us;
-  fprintf(stdout,
-          "%.3f seconds wall time. %.1f MiB/s\n",
-          duration_us / 1e6, bytes_per_microsecond * MiBFactor);
+  fprintf(stdout, "%d thread%s. %.3fs wall time. %.1f MiB/s\n", thread_count,
+          thread_count > 1 ? "s" : "", duration_us / 1e6,
+          bytes_per_microsecond * MiBFactor);
   munmap(buffer, file_size);
 
-  return result;
+  return combined.result;
 }
 
 int main(int argc, char *argv[]) {
   if (argc < 2) {
-    printf("usage: %s <fasm-file> [<fasm-file>...]\n", argv[0]);
+    printf("usage: %s <fasm-file> [<fasm-file>...]\n\tReads PARALLEL_FASM "
+           "environment variable for #threads to use [1..%d].\n",
+           argv[0], 2 * (int)std::thread::hardware_concurrency());
     return 1;
   }
+
+  const int thread_count = GetThreadNumberToUse();
 
   fasm::ParseResult combined_result = fasm::ParseResult::kSuccess;
   for (int i = 1; i < argc; ++i) {
     if (i != 1) fprintf(stdout, "\n");
-    auto result = ParseFile(argv[i]);
+    auto result = ParseFile(argv[i], thread_count);
     combined_result = std::max(combined_result, result);
   }
 
