@@ -10,10 +10,8 @@ Bit address ranges span is limited to 64 bits currently.
 (e.g. `FOO[255:192]` is ok, `BAR[255:0]` is too wide). Looks like at most
 32 bit wide address ranges are used in the wild anyway.
 
-Attributes are not reported in the callback yet, but skipped gracefully.
-
-The parser header file is about 300 lines of well-documented simple C++; the
-`fasm-validation-parse` x84_64 binary occupies about 24KiB.
+If an annotation callback is provided, the caller receives callbacks for each
+attribute name/value pair.
 
 ## API
 
@@ -30,6 +28,12 @@ using ParseCallback =
     std::function<bool(uint32_t line, std::string_view feature, int start_bit,
                        int width, uint64_t bits)>;
 
+// Optional callback that receives annotation name/value pairs. If there are
+// multiple annotations per feature, this is called multiple times.
+using AnnotationCallback =
+    std::function<void(uint32_t line, std::string_view feature, //
+                       std::string_view name, std::string_view value)>;
+
 // Result values in increasing amount of severity. Start to worry at kSkipped.
 enum class ParseResult {
   kSuccess,     // Successful parse
@@ -43,18 +47,22 @@ enum class ParseResult {
 // Parse FPGA assembly file, send parsed values to "parse_callback".
 // The "content" is the buffer to parse; last line needs to end with a newline.
 // Errors/Warnings are reported to "errstream".
-// Attributes are not handled and skipped gracefully.
 //
-// The "feature" string_view passed into the callback function is not ephemeral
-// but backed by the original content, so it is valid for the lifetime of
-// "content".
+// If the optional "annotation_callback" is provided, it receives annotations
+// in {...} blocks. Quotes around value is removed, escaped characters are
+// preserved.
+//
+// The "feature" string_view as well as "name" and "value" for the callbacks
+// are guranteed to not be ephemeral but backed by the original content,
+// so it is valid for the lifetime of "content".
 //
 // If there are warnings or errors, parsing will continue if possible.
 // The most severe issue found is returned.
 //
 // Spec: https://fasm.readthedocs.io/en/latest/specification/syntax.html
 ParseResult parse(std::string_view content, FILE *errstream,
-                  const ParseCallback &parse_callback);
+                  const ParseCallback &parse_callback,
+                  const AnnotationCallback &annotation_callback = {});
 ```
 
 ## Build and Test
@@ -109,7 +117,7 @@ sub-parts of the file in parallel by setting the `PARALLEL_FASM` environment
 variable to the number of desired threads the `fasm-validation-parse` should
 use.
 
-On this Ryzen 1950X, this reaches > 16 GiB/s parse speed:
+On this early Ryzen 1950X, this reaches > 16 GiB/s parse speed:
 
 ```
 $ PARALLEL_FASM=32 ./fasm-validation-parse /tmp/dummy.fasm

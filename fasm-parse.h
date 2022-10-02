@@ -35,6 +35,12 @@ using ParseCallback =
     std::function<bool(uint32_t line, std::string_view feature, int start_bit,
                        int width, uint64_t bits)>;
 
+// Optional callback that receives annotation name/value pairs. If there are
+// multiple annotations per feature, this is called multiple times.
+using AnnotationCallback =
+    std::function<void(uint32_t line, std::string_view feature, //
+                       std::string_view name, std::string_view value)>;
+
 // Result values in increasing amount of severity. Start to worry at kSkipped.
 enum class ParseResult {
   kSuccess,     // Successful parse
@@ -48,18 +54,22 @@ enum class ParseResult {
 // Parse FPGA assembly file, send parsed values to "parse_callback".
 // The "content" is the buffer to parse; last line needs to end with a newline.
 // Errors/Warnings are reported to "errstream".
-// Attributes are not handled and skipped gracefully.
 //
-// The "feature" string_view passed into the callback function is not ephemeral
-// but backed by the original content, so it is valid for the lifetime of
-// "content".
+// If the optional "annotation_callback" is provided, it receives annotations
+// in {...} blocks. Quotes around value is removed, escaped characters are
+// preserved.
+//
+// The "feature" string_view as well as "name" and "value" for the callbacks
+// are guranteed to not be ephemeral but backed by the original content,
+// so it is valid for the lifetime of "content".
 //
 // If there are warnings or errors, parsing will continue if possible.
 // The most severe issue found is returned.
 //
 // Spec: https://fasm.readthedocs.io/en/latest/specification/syntax.html
 inline ParseResult parse(std::string_view content, FILE *errstream,
-                         const ParseCallback &parse_callback);
+                         const ParseCallback &parse_callback,
+                         const AnnotationCallback &annotation_callback = {});
 
 // -- End of API interface; rest is implementation details
 
@@ -116,6 +126,8 @@ inline constexpr char kValidIdentifier[256] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
 };
+
+typedef uint16_t bit_range_t;  // gcc slightly faster with 16 bit
 }  // namespace internal
 
 // [[unlikely]] only available since c++20, so use gcc/clang builtin here.
@@ -139,7 +151,8 @@ inline constexpr char kValidIdentifier[256] = {
       v = v * (base) + d
 
 inline ParseResult parse(std::string_view content, FILE *errstream,
-                         const ParseCallback &parse_callback) {
+                         const ParseCallback &parse_callback,
+                         const AnnotationCallback &annotation_callback) {
   if (content.empty()) {
     return ParseResult::kSuccess;
   }
@@ -153,19 +166,9 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
   const char *it = content.data();
   const char *const end = content.data() + content.size();
   uint32_t line_number = 0;
-  uint64_t bitset;
   while (it < end) {
     ++line_number;
     fasm_skip_blank();
-    if (*it == '\n') {
-      ++it;
-      continue;
-    }
-    if (*it == '#') {
-      fasm_skip_to_start_of_next_line();
-      continue;
-    }
-
     // Read feature name; look for sequence of valid characters.
     // We are a bit lenient if it starts with a non-alphanumeric character
     // (dot, digit, or underscore) which is entirely sufficient for the parsing
@@ -174,135 +177,192 @@ inline ParseResult parse(std::string_view content, FILE *errstream,
     while (internal::kValidIdentifier[(uint8_t)*it]) {
       ++it;
     }
-    std::string_view feature{start_feature, size_t(it - start_feature)};
-
+    const std::string_view feature{start_feature, size_t(it - start_feature)};
     fasm_skip_blank();
 
-    // Read optional feature address and determine width. feature[<max>:<min>]
-    int max_bit = 0;
-    int min_bit = 0;
-    if (*it == '[') {
-      ++it;
-      fasm_parse_number_with_base(max_bit, 10);
-      fasm_skip_blank();
-      if (*it == ':') {
-        ++it;
-        fasm_parse_number_with_base(min_bit, 10);
+    if (!feature.empty()) {
+      // Read optional feature address and determine width. feature[<max>:<min>]
+      internal::bit_range_t max_bit = 0;
+      internal::bit_range_t min_bit = 0;
+      if (*it == '[') {
+        ++it;  // skip '['
+        fasm_parse_number_with_base(max_bit, 10);
         fasm_skip_blank();
-      } else {
-        min_bit = max_bit;
-      }
-      if (fasm_unlikely(*it != ']')) {
-        fprintf(errstream, "%u: ERR expected ']' : '%.*s'\n", line_number,
-                int(it + 1 - start_feature), start_feature);
-        result = ParseResult::kError;
-        fasm_skip_to_start_of_next_line();
-        continue;
-      }
-      ++it;
-      if (fasm_unlikely(max_bit < min_bit)) {
-        fprintf(errstream, "%u: SKIP inverted range %.*s[%d:%d]\n", line_number,
-                (int)feature.size(), feature.data(), max_bit, min_bit);
-        result = std::max(result, ParseResult::kSkipped);
-        fasm_skip_to_start_of_next_line();
-        continue;
-      }
-    }
-    fasm_skip_blank();
-
-    uint32_t width = (max_bit - min_bit + 1);
-    if (fasm_unlikely(width > 64)) {
-      // TODO: if this is needed in practice, then parse in multiple steps and
-      // call back multiple times with parts of the number.
-      fprintf(errstream,
-              "%u: ERR: Sorry, can only deal with ranges <= 64 bit currently "
-              "%.*s[%d:%d]; trimming width %u to 64\n",
-              line_number, (int)feature.size(), feature.data(), max_bit,
-              min_bit, width);
-      result = ParseResult::kError;
-      width = 64;  // Clamp number of bits we report.
-      // Move foward, doing best effort parsing of lower 64 bits.
-    }
-
-    // Assignment.
-    if (*it == '=') {
-      ++it;
-      fasm_skip_blank();
-      bitset = 0;
-      if (internal::kDigitToInt[(uint8_t)*it] <= 9) {
-        fasm_parse_number_with_base(bitset, 10);  // precision or decimal value
-      }
-      fasm_skip_blank();
-      if (*it == '\'') {
-        ++it;
-        fasm_skip_blank();
-        // Last number was actually precision. Simple plausibility, but ignore.
-        if (fasm_unlikely(bitset > width)) {
-          fprintf(errstream,
-                  "%u: WARN Attempt to assign more bits (%" PRIu64 "') for "
-                  "%.*s[%d:%d] with supported bit width of %u\n",
-                  line_number, bitset, (int)feature.size(), feature.data(),
-                  max_bit, min_bit, width);
-          result = std::max(result, ParseResult::kNonCritical);
+        if (*it == ':') {
+          ++it;  // skip ':'
+          fasm_parse_number_with_base(min_bit, 10);
+          fasm_skip_blank();
+        } else {
+          min_bit = max_bit;
         }
-        bitset = 0;
-        const char format_type = *it;
-        ++it;
-        switch (format_type) {
-        case 'h': fasm_parse_number_with_base(bitset, 16); break;
-        case 'b': fasm_parse_number_with_base(bitset, 2);  break;
-        case 'o': fasm_parse_number_with_base(bitset, 8);  break;
-        case 'd': fasm_parse_number_with_base(bitset, 10); break;
-        default:
-          fprintf(errstream, "%u: unknown base signifier '%c'; expected "
-                  "one of b, d, h, o\n", line_number, format_type);
+        if (fasm_unlikely(*it != ']')) {
+          fprintf(errstream, "%u: ERR expected ']' : '%.*s'\n", line_number,
+                  int(it + 1 - start_feature), start_feature);
           result = ParseResult::kError;
-          fasm_skip_to_eol();
-          bitset = 0x01;  // In error state now, but report this feature as set
-          break;
+          fasm_skip_to_start_of_next_line();
+          continue;
+        }
+        ++it;  // skip ']'
+        if (fasm_unlikely(max_bit < min_bit)) {
+          fprintf(errstream, "%u: SKIP inverted range %.*s[%d:%d]\n",
+                  line_number, (int)feature.size(), feature.data(), max_bit,
+                  min_bit);
+          result = std::max(result, ParseResult::kSkipped);
+          fasm_skip_to_start_of_next_line();
+          continue;
+        }
+      }
+      fasm_skip_blank();
+
+      uint32_t width = (max_bit - min_bit + 1);
+      if (fasm_unlikely(width > 64)) {
+        // TODO: if this is needed in practice, then parse in multiple
+        // steps and call back multiple times with parts of the number.
+        fprintf(errstream,
+                "%u: ERR: Sorry, can only deal with ranges <= 64 bit currently "
+                "%.*s[%d:%d]; trimming width %u to 64\n",
+                line_number, (int)feature.size(), feature.data(), max_bit,
+                min_bit, width);
+        result = ParseResult::kError;
+        width = 64; // Clamp number of bits we report.
+        // Move foward, doing best effort parsing of lower 64 bits.
+      }
+
+      uint64_t bitset;
+
+      // Assignment.
+      if (*it == '=') {
+        ++it;  // skip '='
+        fasm_skip_blank();
+        bitset = 0;
+        if (internal::kDigitToInt[(uint8_t)*it] <= 9) {
+          fasm_parse_number_with_base(bitset, 10); // width or decimal value
         }
         fasm_skip_blank();
+        if (*it == '\'') {
+          ++it;  // skip tick
+          fasm_skip_blank();
+          // Last number was actually precision. Simple plausibility, but
+          // ignore.
+          if (fasm_unlikely(bitset > width)) {
+            fprintf(errstream,
+                    "%u: WARN Attempt to assign more bits (%" PRIu64 "') for "
+                    "%.*s[%d:%d] with supported bit width of %u\n",
+                    line_number, bitset, (int)feature.size(), feature.data(),
+                    max_bit, min_bit, width);
+            result = std::max(result, ParseResult::kNonCritical);
+          }
+          bitset = 0;
+          const char format_type = *it;
+          ++it;
+          switch (format_type) {
+          case 'h': fasm_parse_number_with_base(bitset, 16); break;
+          case 'b': fasm_parse_number_with_base(bitset, 2);  break;
+          case 'o': fasm_parse_number_with_base(bitset, 8);  break;
+          case 'd': fasm_parse_number_with_base(bitset, 10); break;
+          default:
+            fprintf(errstream, "%u: unknown base signifier '%c'; expected "
+                    "one of b, d, h, o\n", line_number, format_type);
+            result = ParseResult::kError;
+            fasm_skip_to_eol();
+            bitset = 0x01; // In error state now, but report this feature as set
+            break;
+          }
+          fasm_skip_blank();
+        }
+      } else {
+        bitset = 0x1; // No assignment: default assumption 1 bit set.
+        if (fasm_unlikely(min_bit != max_bit)) {
+          fprintf(errstream,
+                  "%u: INFO Range of bits %.*s[%d:%d], but no assignment\n",
+                  line_number, (int)feature.size(), feature.data(), max_bit,
+                  min_bit);
+          result = std::max(result, ParseResult::kInfo);
+        }
       }
-    } else {
-      bitset = 0x1;  // No assignment: default assumption 1 bit set.
-      if (fasm_unlikely(min_bit != max_bit)) {
-        fprintf(errstream,
-                "%u: INFO Range of bits %.*s[%d:%d], but no assignment\n",
-                line_number, (int)feature.size(), feature.data(), max_bit,
-                min_bit);
-        result = std::max(result, ParseResult::kInfo);
+
+      // Ready to report the feature and their bits.
+      bitset &= uint64_t(-1) >> (64 - width); // Clamp bits if value too wide
+      if (fasm_unlikely(
+              !parse_callback(line_number, feature, min_bit, width, bitset))) {
+        result = std::max(result, ParseResult::kUserAbort);
+        break;
       }
-    }
+    } // non-empty feature
 
-    bitset &= uint64_t(-1) >> (64 - width);  // Clamp bits if value too wide
+    // Annotations might follow
+    if (fasm_unlikely(*it == '{')) {
+      if (annotation_callback) {
+        do {
+          ++it; // skip '{' or ','
+          fasm_skip_blank();
+          const char *const start_name = it;
+          while (internal::kValidIdentifier[(uint8_t)*it]) {
+            ++it;
+          }
+          const std::string_view aname{start_name, size_t(it - start_name)};
 
-    if (*it == '{') {
-      fprintf(errstream, "%u: INFO ignored attributes for '%.*s'\n",
-              line_number, (int)feature.size(), feature.data());
-      result = std::max(result, ParseResult::kInfo);
-      fasm_skip_to_eol(); // Attributes: not implemented yet. Skip gracefully.
-      if (feature.empty()) { // no feature: this is a global file annotation
-        ++it;  // forward to start of next line
-        continue;
+          fasm_skip_blank();
+          if (fasm_unlikely(*it != '=')) {
+            fprintf(errstream, "%d: annotation %.*s: expected '='\n",
+                    line_number, (int)aname.size(), aname.data());
+            result = ParseResult::kError;
+            break;
+          }
+          ++it;  // skip '='
+
+          fasm_skip_blank();
+          if (fasm_unlikely(*it != '"')) {
+            fprintf(errstream,
+                    "%d: %.*s : annotation '%.*s': value not quoted\n",
+                    line_number, (int)feature.size(), feature.data(),
+                    (int)aname.size(), aname.data());
+            result = ParseResult::kError;
+            break;
+          }
+
+          const char *const start_value = it + 1;
+          do {
+            ++it;
+            while (*it != '"' && *it != '\n') {
+              ++it;
+            }
+          } while (*(it - 1) == '\\' && *it != '\n'); // quote was escaped
+          const std::string_view avalue{start_value, size_t(it - start_value)};
+
+          if (fasm_unlikely(*it == '\n')) {
+            fprintf(errstream,
+                    "%d: annotation not finished before end of line\n",
+                    line_number);
+            result = ParseResult::kError;
+            break;
+          }
+          annotation_callback(line_number, feature, aname, avalue);
+          ++it; // skip '"'
+
+          fasm_skip_blank();
+        } while (*it == ',');
+
+        if (*it != '}') {
+          fprintf(errstream, "%d: annotations: expected ',' or '}'; got '%c'\n",
+                  line_number, *it);
+          result = ParseResult::kError;
+        }
       }
-      // Move forward as we still have feature+bits to report in callback
-    }
 
-    if (*it == '#') {
       fasm_skip_to_eol();
     }
+
+    if (*it == '#' || *it == '\r') {
+      fasm_skip_to_eol();
+    }
+
     if (fasm_unlikely(*it != '\n')) {
       fprintf(errstream, "%d: expected newline, got '%c'\n", line_number, *it);
       result = ParseResult::kError;
       fasm_skip_to_eol();
     }
-    ++it;  // Get ready for next line and position there.
-
-    if (fasm_unlikely(
-            !parse_callback(line_number, feature, min_bit, width, bitset))) {
-      result = std::max(result, ParseResult::kUserAbort);
-      break;
-    }
+    ++it;  // Consume \n and get ready for next line and position there.
   }
   return result;
 }
