@@ -1,7 +1,7 @@
 Simple FPGA assembler file format parser
 ----------------------------------------
 
-Simple to use and fast [single-header](./fasm-parse.h) implementation of a
+Simple to use and fast [single-header](./fasm-parse.h) C++ implementation of a
 parser for the [fasm] FPGA assembly format.
 
 This is _not_ related to the implementation found at [chipsalliance-fasm] [^1].
@@ -12,6 +12,10 @@ Bit address ranges span is limited to 64 bits currently.
 
 If an annotation callback is provided, the caller receives callbacks for each
 attribute name/value pair.
+
+For bindings with other languages, a feature-equivalent C API
+[is provided](./c-fasm-parse.h), which is _not_ single-header but also
+requires your code to link `c-fasm-parse.o`.
 
 ## API
 
