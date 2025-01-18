@@ -1,0 +1,8 @@
+*~
+*.o
+.envrc
+.direnv
+fasm-generate-testfile
+fasm-parse_test
+fasm-validation-parse
+c-fasm-validation-parse
