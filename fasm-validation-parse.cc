@@ -41,6 +41,12 @@ struct ParseStatistics {
   fasm::ParseResult result = fasm::ParseResult::kSuccess;
 };
 
+void Accumulate(const ParseStatistics &stats, ParseStatistics *accumulator) {
+  accumulator->accumulate ^= stats.accumulate;
+  accumulator->last_line += stats.last_line;
+  accumulator->result = std::max(accumulator->result, stats.result);
+}
+
 ParseStatistics ParseContent(std::string_view content) {
   ParseStatistics stats;
   stats.result = fasm::parse(
@@ -61,7 +67,7 @@ int GetThreadNumberToUse() {
 }
 
 // Parse file and print number of lines and performance report.
-fasm::ParseResult ParseFile(const char *fasm_file, int thread_count) {
+fasm::ParseResult ParseFileFast(const char *fasm_file, int thread_count) {
   const int fd = open(fasm_file, O_RDONLY);
   if (fd < 0) {
     perror("Can't open file");
@@ -122,9 +128,7 @@ fasm::ParseResult ParseFile(const char *fasm_file, int thread_count) {
 
   ParseStatistics combined;
   for (const ParseStatistics &thread_result : results) {
-    combined.accumulate ^= thread_result.accumulate;
-    combined.last_line += thread_result.last_line;
-    combined.result = std::max(combined.result, thread_result.result);
+    Accumulate(thread_result, &combined);
   }
   fprintf(stdout, "%d lines. XOR of all values: %" PRIX64 "\n",
           combined.last_line, combined.accumulate);
@@ -138,6 +142,35 @@ fasm::ParseResult ParseFile(const char *fasm_file, int thread_count) {
   return combined.result;
 }
 
+// No threads, just stdio reading, line by line.
+fasm::ParseResult ParseFileSimple(const char *fasm_file, int) {
+  FILE *f = fopen(fasm_file, "r");
+  if (!f) {
+    perror("Can't open file");
+    return fasm::ParseResult::kError;
+  }
+  size_t buf_size = 8192;
+  char *buffer = (char*)malloc(buf_size);  // will be realloc()'ed if needed.
+
+  const int64_t start_us = getTimeInMicros();
+  ParseStatistics combined;
+  ssize_t line_length;
+  while ((line_length = getline(&buffer, &buf_size, f)) > 0) {
+    const std::string_view content(buffer, line_length);
+    Accumulate(ParseContent(content), &combined);
+  }
+  const int64_t duration_us = getTimeInMicros() - start_us;
+  free(buffer);
+  fclose(f);
+  fprintf(stdout, "%d lines. XOR of all values: %" PRIX64 "\n",
+          combined.last_line, combined.accumulate);
+  fprintf(stdout, "%.3fs wall time. %.1f MLines/s\n", duration_us / 1e6,
+          1.0 * combined.last_line / duration_us);
+
+  return combined.result;
+}
+
+
 int main(int argc, char *argv[]) {
   if (argc < 2) {
     printf("usage: %s <fasm-file> [<fasm-file>...]\n\tReads PARALLEL_FASM "
@@ -146,12 +179,16 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  // Allow use to choose which parse function to use.
+  auto ParseFunctionToUse =
+      getenv("USE_STDIO_PARSE") ? ParseFileSimple : ParseFileFast;
+
   const int thread_count = GetThreadNumberToUse();
 
   fasm::ParseResult combined_result = fasm::ParseResult::kSuccess;
   for (int i = 1; i < argc; ++i) {
     if (i != 1) fprintf(stdout, "\n");
-    auto result = ParseFile(argv[i], thread_count);
+    auto result = ParseFunctionToUse(argv[i], thread_count);
     combined_result = std::max(combined_result, result);
   }
 

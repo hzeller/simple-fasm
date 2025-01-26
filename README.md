@@ -133,6 +133,17 @@ Parsing /tmp/dummy.fasm with 3784055505 Bytes.
 This just parsed 100 Million FASM lines with address ranges and hex-number
 assignment in a fifth of a second. Not too shabby.
 
+To show a simpler parsing without mmap and parallel reading, just from `stdio`,
+you'll have a bit more overhead due to double-copying memory and calling
+Parse() for each single line, and you can't use threads, but overall it is
+also probably still good enough for the typical appliation:
+
+```
+$ USE_STDIO_PARSE=1 ./fasm-validation-parse /tmp/dummy.fasm
+100000000 lines. XOR of all values: 230C2BE345D5860A
+7.884s wall time. 12.7 MLines/s
+```
+
 [^1]: which I couldn't get to compile because of Conda/Python fragility and
 bloat. That checked out repository with environment set-up and build takes
 about 1.8G of disk, then the test fails with some dependency issue...
