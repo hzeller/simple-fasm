@@ -1,6 +1,15 @@
 Simple FPGA assembler file format parser
 ----------------------------------------
 
+## Complete fpga assembler is using this lib
+
+Note, this parser now is used in a full implementation of an fpga-assembler.
+
+So if you need that, you find it at:
+
+https://github.com/lromor/fpga-assembler
+
+## Overview
 Simple to use and fast [single-header](./fasm-parse.h) C++ implementation of a
 parser for the [fasm] FPGA assembly format.
 
